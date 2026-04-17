@@ -2,6 +2,7 @@
 package auth
 
 import (
+	"fmt"
 	"net/http"
 )
 
@@ -18,9 +19,12 @@ type APIKeyAuth struct {
 }
 
 // NewAPIKeyAuth returns an Authenticator that sets the Authorization header
-// to "Bearer <apiKey>".
-func NewAPIKeyAuth(apiKey string) *APIKeyAuth {
-	return &APIKeyAuth{apiKey: apiKey}
+// to "Bearer <apiKey>". It returns an error if apiKey is empty.
+func NewAPIKeyAuth(apiKey string) (*APIKeyAuth, error) {
+	if apiKey == "" {
+		return nil, fmt.Errorf("api key must not be empty")
+	}
+	return &APIKeyAuth{apiKey: apiKey}, nil
 }
 
 // Authenticate sets the Authorization header on the given request.

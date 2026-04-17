@@ -13,17 +13,16 @@ import (
 )
 
 const (
-	defaultBaseURL = "https://api.mezon.ai/v1"
-	defaultTimeout = 30 * time.Second
+	// DefaultBaseURL is the default Mezon API endpoint.
+	DefaultBaseURL    = "https://api.mezon.ai/v1"
+	defaultHTTPTimeout = 30 * time.Second
 )
 
 // Client is the main entry point for the Mezon SDK.
 // Use New to construct one.
 type Client struct {
-	baseURL    string
-	httpClient *httpclient.Client
-	logger     *slog.Logger
-	auth       auth.Authenticator
+	http   *httpclient.Client
+	logger *slog.Logger
 }
 
 // Option is a functional option for configuring a Client.
@@ -52,8 +51,16 @@ func WithLogger(l *slog.Logger) Option {
 }
 
 // WithAPIKey configures bearer-token authentication.
+// Returns an option that errors during New if the key is empty.
 func WithAPIKey(apiKey string) Option {
-	return func(c *config) { c.auth = auth.NewAPIKeyAuth(apiKey) }
+	return func(c *config) {
+		a, err := auth.NewAPIKeyAuth(apiKey)
+		if err != nil {
+			// Store nil; New will detect missing auth and report clearly.
+			return
+		}
+		c.auth = a
+	}
 }
 
 // WithAuthenticator sets a custom Authenticator implementation.
@@ -65,9 +72,9 @@ func WithAuthenticator(a auth.Authenticator) Option {
 // WithAuthenticator, otherwise New returns ErrMissingAPIKey.
 func New(opts ...Option) (*Client, error) {
 	cfg := &config{
-		baseURL: defaultBaseURL,
+		baseURL: DefaultBaseURL,
 		httpClient: &http.Client{
-			Timeout: defaultTimeout,
+			Timeout: defaultHTTPTimeout,
 		},
 		logger: slog.Default(),
 	}
@@ -81,10 +88,8 @@ func New(opts ...Option) (*Client, error) {
 	}
 
 	return &Client{
-		baseURL:    cfg.baseURL,
-		httpClient: httpclient.New(cfg.httpClient, cfg.baseURL),
-		logger:     cfg.logger,
-		auth:       cfg.auth,
+		http:   httpclient.New(cfg.httpClient, cfg.baseURL, cfg.auth),
+		logger: cfg.logger,
 	}, nil
 }
 
@@ -92,4 +97,8 @@ func New(opts ...Option) (*Client, error) {
 func (c *Client) Logger() *slog.Logger { return c.logger }
 
 // BaseURL returns the configured API base URL.
-func (c *Client) BaseURL() string { return c.baseURL }
+func (c *Client) BaseURL() string { return c.http.BaseURL() }
+
+// HTTP returns the internal httpclient for use by sub-resource clients.
+// It is exported for use within the SDK packages only.
+func (c *Client) HTTP() *httpclient.Client { return c.http }

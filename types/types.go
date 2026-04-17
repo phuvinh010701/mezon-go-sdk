@@ -3,13 +3,13 @@ package types
 
 // PaginationParams holds common pagination parameters for list requests.
 type PaginationParams struct {
-	Limit  int
-	Offset int
+	Limit  int `json:"limit,omitempty"  url:"limit,omitempty"`
+	Offset int `json:"offset,omitempty" url:"offset,omitempty"`
 }
 
 // Response is a generic wrapper for API responses with metadata.
 type Response[T any] struct {
-	Data    T      `json:"data"`
-	Total   int    `json:"total,omitempty"`
-	HasMore bool   `json:"has_more,omitempty"`
+	Data    T    `json:"data"`
+	Total   int  `json:"total,omitempty"`
+	HasMore bool `json:"has_more,omitempty"`
 }
