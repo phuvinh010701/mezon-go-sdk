@@ -14,8 +14,10 @@ import (
 
 const (
 	// DefaultBaseURL is the default Mezon API endpoint.
-	DefaultBaseURL    = "https://api.mezon.ai/v1"
+	DefaultBaseURL     = "https://api.mezon.ai/v1"
 	defaultHTTPTimeout = 30 * time.Second
+	// DefaultMaxRetries is the default number of retry attempts on transient errors.
+	DefaultMaxRetries = 3
 )
 
 // Client is the main entry point for the Mezon SDK.
@@ -33,6 +35,9 @@ type config struct {
 	httpClient *http.Client
 	logger     *slog.Logger
 	auth       auth.Authenticator
+	maxRetries int
+	// err holds the first error produced by an option, surfaced by New.
+	err error
 }
 
 // WithBaseURL overrides the default API base URL.
@@ -51,12 +56,15 @@ func WithLogger(l *slog.Logger) Option {
 }
 
 // WithAPIKey configures bearer-token authentication.
-// Returns an option that errors during New if the key is empty.
+// If apiKey is empty, New will return a descriptive error.
 func WithAPIKey(apiKey string) Option {
 	return func(c *config) {
+		if c.err != nil {
+			return // already failing; don't overwrite the first error
+		}
 		a, err := auth.NewAPIKeyAuth(apiKey)
 		if err != nil {
-			// Store nil; New will detect missing auth and report clearly.
+			c.err = fmt.Errorf("WithAPIKey: %w", err)
 			return
 		}
 		c.auth = a
@@ -68,6 +76,13 @@ func WithAuthenticator(a auth.Authenticator) Option {
 	return func(c *config) { c.auth = a }
 }
 
+// WithMaxRetries sets the maximum number of retry attempts for transient
+// errors (5xx responses and network-level failures). A value of 0 disables
+// retries. The default is DefaultMaxRetries.
+func WithMaxRetries(n int) Option {
+	return func(c *config) { c.maxRetries = n }
+}
+
 // New constructs a new Client. An API key must be provided via WithAPIKey or
 // WithAuthenticator, otherwise New returns ErrMissingAPIKey.
 func New(opts ...Option) (*Client, error) {
@@ -76,11 +91,17 @@ func New(opts ...Option) (*Client, error) {
 		httpClient: &http.Client{
 			Timeout: defaultHTTPTimeout,
 		},
-		logger: slog.Default(),
+		logger:     slog.Default(),
+		maxRetries: DefaultMaxRetries,
 	}
 
 	for _, o := range opts {
 		o(cfg)
+	}
+
+	// Surface any option-level error (e.g. empty API key) before proceeding.
+	if cfg.err != nil {
+		return nil, cfg.err
 	}
 
 	if cfg.auth == nil {
@@ -88,7 +109,7 @@ func New(opts ...Option) (*Client, error) {
 	}
 
 	return &Client{
-		http:   httpclient.New(cfg.httpClient, cfg.baseURL, cfg.auth),
+		http:   httpclient.New(cfg.httpClient, cfg.baseURL, cfg.auth, cfg.maxRetries),
 		logger: cfg.logger,
 	}, nil
 }

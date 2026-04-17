@@ -24,13 +24,17 @@ func TestNew_MissingAPIKey(t *testing.T) {
 }
 
 func TestNew_EmptyAPIKey(t *testing.T) {
-	// WithAPIKey("") silently skips — auth remains nil — so New returns ErrMissingAPIKey.
+	// WithAPIKey("") now propagates a descriptive error through config.err.
 	_, err := client.New(client.WithAPIKey(""))
 	if err == nil {
 		t.Fatal("expected error for empty api key, got nil")
 	}
-	if !errors.Is(err, sdkerrors.ErrMissingAPIKey) {
-		t.Fatalf("expected ErrMissingAPIKey, got: %v", err)
+	// The error message should mention the empty key, not the generic missing-key sentinel.
+	if errors.Is(err, sdkerrors.ErrMissingAPIKey) {
+		t.Fatalf("expected a specific WithAPIKey validation error, not ErrMissingAPIKey; got: %v", err)
+	}
+	if err.Error() == "" {
+		t.Fatal("expected non-empty error message")
 	}
 }
 
@@ -86,6 +90,19 @@ func TestNew_WithHTTPClient(t *testing.T) {
 	c, err := client.New(
 		client.WithAPIKey("test-key"),
 		client.WithHTTPClient(custom),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if c == nil {
+		t.Fatal("expected non-nil client")
+	}
+}
+
+func TestNew_WithMaxRetries(t *testing.T) {
+	c, err := client.New(
+		client.WithAPIKey("test-key"),
+		client.WithMaxRetries(0),
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
