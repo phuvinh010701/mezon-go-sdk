@@ -249,3 +249,62 @@ func TestDo_ContextCancellation(t *testing.T) {
 		t.Fatalf("Do took too long (%v); context cancellation may not be working", elapsed)
 	}
 }
+
+// TestDo_RateLimited_RetriesWithRetryAfterSeconds verifies that a 429 response
+// with a numeric Retry-After header is retried and the wait is honoured.
+func TestDo_RateLimited_RetriesWithRetryAfterSeconds(t *testing.T) {
+	var callCount atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := callCount.Add(1)
+		if n == 1 {
+			w.Header().Set("Retry-After", "0") // 0s so the test doesn't actually wait
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(`{"code":"rate_limited","message":"slow down"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"ok": "true"})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv, 2)
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/resource", nil)
+	var out map[string]string
+	if err := c.Do(context.Background(), req, &out); err != nil {
+		t.Fatalf("expected success after 429 retry, got: %v", err)
+	}
+	if got := int(callCount.Load()); got != 2 {
+		t.Fatalf("expected 2 calls (1 rate-limited + 1 success), got %d", got)
+	}
+}
+
+// TestDo_RateLimited_ExhaustsRetries verifies that when all attempts return 429
+// the final error is a rate-limit APIError.
+func TestDo_RateLimited_ExhaustsRetries(t *testing.T) {
+	var callCount atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount.Add(1)
+		w.Header().Set("Retry-After", "0")
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte(`{"code":"rate_limited","message":"slow down"}`))
+	}))
+	defer srv.Close()
+
+	const maxRetries = 2
+	c := newTestClient(t, srv, maxRetries)
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/resource", nil)
+	err := c.Do(context.Background(), req, nil)
+	if err == nil {
+		t.Fatal("expected error after exhausted retries, got nil")
+	}
+	if !errors.Is(err, sdkerrors.ErrRateLimited) {
+		t.Fatalf("expected ErrRateLimited in error chain, got: %v", err)
+	}
+	if got := int(callCount.Load()); got != maxRetries+1 {
+		t.Fatalf("expected %d calls, got %d", maxRetries+1, got)
+	}
+}

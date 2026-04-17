@@ -12,6 +12,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/phuvinh010701/mezon-go-sdk/auth"
@@ -45,8 +46,10 @@ func New(httpClient Doer, baseURL string, authenticator auth.Authenticator, maxR
 
 // Do executes an HTTP request, applies authentication, and decodes the JSON
 // response body into out. On non-2xx responses it returns an *sdkerrors.APIError.
-// Transient failures (5xx responses, network errors) are retried up to maxRetries
-// times using exponential backoff, respecting context cancellation.
+// Transient failures (5xx, 429, timeout network errors) are retried up to
+// maxRetries times. For 429 responses the Retry-After header is honoured when
+// present; all other retries use exponential backoff. Context cancellation is
+// respected at every wait point.
 func (c *Client) Do(ctx context.Context, req *http.Request, out any) error {
 	// Buffer the body so it can be replayed on retries.
 	var bodyBytes []byte
@@ -61,15 +64,6 @@ func (c *Client) Do(ctx context.Context, req *http.Request, out any) error {
 
 	var lastErr error
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
-		if attempt > 0 {
-			wait := backoff(attempt)
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(wait):
-			}
-		}
-
 		// Rebuild a fresh request for each attempt (body reader is consumed after first use).
 		r := req.Clone(ctx)
 		if bodyBytes != nil {
@@ -85,9 +79,12 @@ func (c *Client) Do(ctx context.Context, req *http.Request, out any) error {
 
 		resp, err := c.httpClient.Do(r)
 		if err != nil {
-			// Network-level error — retry if we have attempts left.
+			// Network-level error — retry if transient.
 			if isRetryableNetworkError(err) {
 				lastErr = fmt.Errorf("http request (attempt %d): %w", attempt+1, err)
+				if !c.sleep(ctx, backoff(attempt+1)) {
+					return ctx.Err()
+				}
 				continue
 			}
 			return fmt.Errorf("http request: %w", err)
@@ -112,9 +109,17 @@ func (c *Client) Do(ctx context.Context, req *http.Request, out any) error {
 			}
 			apiErr := sdkerrors.ParseAPIError(resp.StatusCode, code, message)
 
-			// Retry only on 5xx responses.
-			if resp.StatusCode >= 500 {
+			// Retry on 5xx and 429 (rate limited).
+			if resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
 				lastErr = apiErr
+				wait := backoff(attempt + 1)
+				if resp.StatusCode == http.StatusTooManyRequests {
+					// Prefer Retry-After over exponential backoff for rate limiting.
+					wait = retryAfter(resp.Header.Get("Retry-After"))
+				}
+				if !c.sleep(ctx, wait) {
+					return ctx.Err()
+				}
 				continue
 			}
 			return apiErr
@@ -131,6 +136,16 @@ func (c *Client) Do(ctx context.Context, req *http.Request, out any) error {
 	return fmt.Errorf("request failed after %d attempts: %w", c.maxRetries+1, lastErr)
 }
 
+// sleep waits for d or until ctx is cancelled. Returns false if ctx is done.
+func (c *Client) sleep(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
+	}
+}
+
 // BaseURL returns the base URL of the client.
 func (c *Client) BaseURL() string {
 	return c.baseURL
@@ -144,6 +159,27 @@ func backoff(attempt int) time.Duration {
 		ms = 10_000
 	}
 	return time.Duration(ms) * time.Millisecond
+}
+
+// retryAfter parses the value of a Retry-After header and returns the
+// corresponding wait duration. It supports both integer seconds ("120") and
+// HTTP-date formats. Falls back to exponential backoff attempt-1 (100ms) when
+// the header is absent or unparseable.
+func retryAfter(header string) time.Duration {
+	if header == "" {
+		return backoff(1)
+	}
+	// Try seconds (most common).
+	if secs, err := strconv.ParseFloat(header, 64); err == nil && secs > 0 {
+		return time.Duration(secs * float64(time.Second))
+	}
+	// Try HTTP-date.
+	if t, err := http.ParseTime(header); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return backoff(1)
 }
 
 // isRetryableNetworkError reports whether a transport-level error is transient
