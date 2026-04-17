@@ -31,13 +31,15 @@ func (s sentinelError) Error() string { return string(s) }
 // Sentinel errors for common failure modes.
 // These are immutable values; use errors.Is to test for them.
 var (
-	ErrUnauthorized   = sentinelError("unauthorized")
-	ErrForbidden      = sentinelError("forbidden")
-	ErrNotFound       = sentinelError("not found")
-	ErrRateLimited    = sentinelError("rate limited")
-	ErrInternalServer = sentinelError("internal server error")
+	ErrUnauthorized    = sentinelError("unauthorized")
+	ErrForbidden       = sentinelError("forbidden")
+	ErrNotFound        = sentinelError("not found")
+	ErrRateLimited     = sentinelError("rate limited")
+	ErrInternalServer  = sentinelError("internal server error")
 	ErrInvalidArgument = errors.New("invalid argument")
 	ErrMissingAPIKey   = errors.New("missing api key")
+	ErrAuthFailed      = errors.New("authentication failed")
+	ErrTokenExpired    = sentinelError("token expired")
 )
 
 // newAPIError constructs an APIError that wraps the given sentinel so that

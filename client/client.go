@@ -29,10 +29,11 @@ type Client struct {
 type Option func(*config)
 
 type config struct {
-	baseURL    string
-	httpClient *http.Client
-	logger     *slog.Logger
-	auth       auth.Authenticator
+	baseURL     string
+	httpClient  *http.Client
+	logger      *slog.Logger
+	auth        auth.Authenticator
+	retryConfig *httpclient.RetryConfig
 }
 
 // WithBaseURL overrides the default API base URL.
@@ -68,6 +69,16 @@ func WithAuthenticator(a auth.Authenticator) Option {
 	return func(c *config) { c.auth = a }
 }
 
+// WithTimeout sets the HTTP client timeout.
+func WithTimeout(d time.Duration) Option {
+	return func(c *config) { c.httpClient.Timeout = d }
+}
+
+// WithRetry configures retry behavior for HTTP requests.
+func WithRetry(cfg httpclient.RetryConfig) Option {
+	return func(c *config) { c.retryConfig = &cfg }
+}
+
 // New constructs a new Client. An API key must be provided via WithAPIKey or
 // WithAuthenticator, otherwise New returns ErrMissingAPIKey.
 func New(opts ...Option) (*Client, error) {
@@ -87,8 +98,13 @@ func New(opts ...Option) (*Client, error) {
 		return nil, fmt.Errorf("%w: provide WithAPIKey or WithAuthenticator", sdkerrors.ErrMissingAPIKey)
 	}
 
+	hc := httpclient.New(cfg.httpClient, cfg.baseURL, cfg.auth)
+	if cfg.retryConfig != nil {
+		hc = hc.WithRetry(*cfg.retryConfig)
+	}
+
 	return &Client{
-		http:   httpclient.New(cfg.httpClient, cfg.baseURL, cfg.auth),
+		http:   hc,
 		logger: cfg.logger,
 	}, nil
 }
