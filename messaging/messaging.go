@@ -16,6 +16,7 @@
 package messaging
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -53,7 +54,11 @@ func (s *Service) SendMessage(ctx context.Context, req *models.SendMessageReques
 		return nil, errMissingField("Content")
 	}
 
-	httpReq, err := s.c.HTTP().NewRequest(ctx, http.MethodPost, "/channels/messages", jsonBody(req))
+	body, err := jsonBody(req)
+	if err != nil {
+		return nil, err
+	}
+	httpReq, err := s.c.HTTP().NewRequest(ctx, http.MethodPost, "/channels/messages", body)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +86,11 @@ func (s *Service) SendEphemeralMessage(ctx context.Context, req *models.SendEphe
 		return nil, errMissingField("Content")
 	}
 
-	httpReq, err := s.c.HTTP().NewRequest(ctx, http.MethodPost, "/channels/messages/ephemeral", jsonBody(req))
+	body, err := jsonBody(req)
+	if err != nil {
+		return nil, err
+	}
+	httpReq, err := s.c.HTTP().NewRequest(ctx, http.MethodPost, "/channels/messages/ephemeral", body)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +118,11 @@ func (s *Service) EditMessage(ctx context.Context, req *models.EditMessageReques
 		return nil, errMissingField("Content")
 	}
 
-	httpReq, err := s.c.HTTP().NewRequest(ctx, http.MethodPut, "/channels/messages", jsonBody(req))
+	body, err := jsonBody(req)
+	if err != nil {
+		return nil, err
+	}
+	httpReq, err := s.c.HTTP().NewRequest(ctx, http.MethodPut, "/channels/messages", body)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +147,11 @@ func (s *Service) DeleteMessage(ctx context.Context, req *models.DeleteMessageRe
 		return errMissingField("ChannelID")
 	}
 
-	httpReq, err := s.c.HTTP().NewRequest(ctx, http.MethodDelete, "/channels/messages", jsonBody(req))
+	body, err := jsonBody(req)
+	if err != nil {
+		return err
+	}
+	httpReq, err := s.c.HTTP().NewRequest(ctx, http.MethodDelete, "/channels/messages", body)
 	if err != nil {
 		return err
 	}
@@ -158,7 +175,11 @@ func (s *Service) AddReaction(ctx context.Context, req *models.AddReactionReques
 		return errMissingField("Emoji")
 	}
 
-	httpReq, err := s.c.HTTP().NewRequest(ctx, http.MethodPost, "/channels/messages/emoji", jsonBody(req))
+	body, err := jsonBody(req)
+	if err != nil {
+		return err
+	}
+	httpReq, err := s.c.HTTP().NewRequest(ctx, http.MethodPost, "/channels/messages/emoji", body)
 	if err != nil {
 		return err
 	}
@@ -168,13 +189,14 @@ func (s *Service) AddReaction(ctx context.Context, req *models.AddReactionReques
 }
 
 // RemoveReaction removes an emoji reaction from a message.
-// Set ActionDelete=true in the request to trigger deletion.
 func (s *Service) RemoveReaction(ctx context.Context, req *models.AddReactionRequest) error {
 	if req == nil {
 		return errNilRequest("AddReactionRequest")
 	}
-	req.ActionDelete = true
-	return s.AddReaction(ctx, req)
+	// Copy to avoid mutating the caller's struct.
+	r := *req
+	r.ActionDelete = true
+	return s.AddReaction(ctx, &r)
 }
 
 // -------------------------------------------------------------------
@@ -205,7 +227,11 @@ func (s *Service) ListChannels(ctx context.Context, req *models.ListChannelsRequ
 		req = &models.ListChannelsRequest{}
 	}
 
-	httpReq, err := s.c.HTTP().NewRequest(ctx, http.MethodPost, "/channels/list", jsonBody(req))
+	body, err := jsonBody(req)
+	if err != nil {
+		return nil, err
+	}
+	httpReq, err := s.c.HTTP().NewRequest(ctx, http.MethodPost, "/channels/list", body)
 	if err != nil {
 		return nil, err
 	}
@@ -224,7 +250,11 @@ func (s *Service) CreateChannel(ctx context.Context, req *models.CreateChannelRe
 		return nil, errNilRequest("CreateChannelRequest")
 	}
 
-	httpReq, err := s.c.HTTP().NewRequest(ctx, http.MethodPost, "/channels", jsonBody(req))
+	body, err := jsonBody(req)
+	if err != nil {
+		return nil, err
+	}
+	httpReq, err := s.c.HTTP().NewRequest(ctx, http.MethodPost, "/channels", body)
 	if err != nil {
 		return nil, err
 	}
@@ -241,31 +271,13 @@ func (s *Service) CreateChannel(ctx context.Context, req *models.CreateChannelRe
 // Helpers
 // -------------------------------------------------------------------
 
-func jsonBody(v any) *jsonReader {
-	return &jsonReader{v: v}
-}
-
-// jsonReader lazily marshals v into an io.Reader for use as an HTTP request body.
-type jsonReader struct {
-	v   any
-	buf []byte
-	pos int
-}
-
-func (r *jsonReader) Read(p []byte) (int, error) {
-	if r.buf == nil {
-		var err error
-		r.buf, err = json.Marshal(r.v)
-		if err != nil {
-			return 0, err
-		}
+// jsonBody marshals v and returns an io.Reader suitable for use as an HTTP request body.
+func jsonBody(v any) (io.Reader, error) {
+	buf, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
 	}
-	if r.pos >= len(r.buf) {
-		return 0, io.EOF
-	}
-	n := copy(p, r.buf[r.pos:])
-	r.pos += n
-	return n, nil
+	return bytes.NewReader(buf), nil
 }
 
 func errNilRequest(name string) error {

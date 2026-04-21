@@ -183,7 +183,8 @@ type ChannelDetail struct {
 	// Topic is the channel topic/description.
 	Topic string `json:"topic,omitempty"`
 	// IsPublic indicates whether the channel is visible to all clan members.
-	IsPublic bool `json:"is_public,omitempty"`
+	// Uses *bool so that false is transmitted rather than omitted.
+	IsPublic *bool `json:"is_public,omitempty"`
 }
 
 // CreateChannelRequest is the request body for creating a new channel or DM.
@@ -213,7 +214,8 @@ type ListChannelsRequest struct {
 	// Cursor is the pagination cursor from a previous response.
 	Cursor string `json:"cursor,omitempty"`
 	// IsMobile adjusts the response for mobile clients.
-	IsMobile bool `json:"is_mobile,omitempty"`
+	// Uses *bool so that false is transmitted rather than omitted.
+	IsMobile *bool `json:"is_mobile,omitempty"`
 }
 
 // --------------------------------- Message ---------------------------------
@@ -298,7 +300,8 @@ type EmbedField struct {
 	// Value is the field content.
 	Value string `json:"value"`
 	// Inline controls whether the field is rendered side-by-side with others.
-	Inline bool `json:"inline,omitempty"`
+	// Uses *bool so that false is transmitted rather than omitted.
+	Inline *bool `json:"inline,omitempty"`
 }
 
 // EmbedFooter is the footer component of a MessageEmbed.
@@ -339,13 +342,16 @@ type ChannelMessage struct {
 	// UpdateTime is the last edit timestamp.
 	UpdateTime string `json:"update_time,omitempty"`
 	// MentionEveryone indicates whether this message mentions @everyone.
-	MentionEveryone bool `json:"mention_everyone,omitempty"`
+	// Uses *bool so that false is transmitted rather than omitted.
+	MentionEveryone *bool `json:"mention_everyone,omitempty"`
 	// Anonymous indicates the sender ID is hidden.
-	Anonymous bool `json:"anonymous,omitempty"`
+	// Uses *bool so that false is transmitted rather than omitted.
+	Anonymous *bool `json:"anonymous,omitempty"`
 	// Mode is the stream mode used for this message.
 	Mode ChannelStreamMode `json:"mode,omitempty"`
 	// IsPublic indicates whether the channel is public.
-	IsPublic bool `json:"is_public,omitempty"`
+	// Uses *bool so that false is transmitted rather than omitted.
+	IsPublic *bool `json:"is_public,omitempty"`
 }
 
 // ChannelMessageAck is the acknowledgement returned after sending a message.
@@ -369,7 +375,8 @@ type SendMessageRequest struct {
 	// Mode is the stream mode for this channel.
 	Mode ChannelStreamMode `json:"mode"`
 	// IsPublic must match the channel's public setting.
-	IsPublic bool `json:"is_public,omitempty"`
+	// Uses *bool so that false is transmitted rather than omitted.
+	IsPublic *bool `json:"is_public,omitempty"`
 	// Content is the structured message body.
 	Content *MessageContent `json:"content"`
 	// Mentions lists users to mention.
@@ -379,9 +386,11 @@ type SendMessageRequest struct {
 	// References lists messages this is replying to.
 	References []MessageRef `json:"references,omitempty"`
 	// MentionEveryone sends an @everyone notification.
-	MentionEveryone bool `json:"mention_everyone,omitempty"`
+	// Uses *bool so that false is transmitted rather than omitted.
+	MentionEveryone *bool `json:"mention_everyone,omitempty"`
 	// Anonymous hides the sender identity.
-	Anonymous bool `json:"anonymous,omitempty"`
+	// Uses *bool so that false is transmitted rather than omitted.
+	Anonymous *bool `json:"anonymous,omitempty"`
 	// TopicID links to a thread topic.
 	TopicID string `json:"topic_id,omitempty"`
 	// Code is the message type (defaults to MessageTypeChat).
@@ -399,7 +408,8 @@ type EditMessageRequest struct {
 	// Mode is the stream mode.
 	Mode ChannelStreamMode `json:"mode"`
 	// IsPublic must match the channel's public setting.
-	IsPublic bool `json:"is_public,omitempty"`
+	// Uses *bool so that false is transmitted rather than omitted.
+	IsPublic *bool `json:"is_public,omitempty"`
 	// Content is the new message body.
 	Content *MessageContent `json:"content"`
 	// Mentions updates the mention list.
@@ -421,7 +431,8 @@ type DeleteMessageRequest struct {
 	// Mode is the stream mode.
 	Mode ChannelStreamMode `json:"mode"`
 	// IsPublic must match the channel's public setting.
-	IsPublic bool `json:"is_public,omitempty"`
+	// Uses *bool so that false is transmitted rather than omitted.
+	IsPublic *bool `json:"is_public,omitempty"`
 }
 
 // SendEphemeralRequest is the request body for sending an ephemeral message
@@ -434,7 +445,8 @@ type SendEphemeralRequest struct {
 	// Mode is the stream mode.
 	Mode ChannelStreamMode `json:"mode"`
 	// IsPublic must match the channel's public setting.
-	IsPublic bool `json:"is_public,omitempty"`
+	// Uses *bool so that false is transmitted rather than omitted.
+	IsPublic *bool `json:"is_public,omitempty"`
 	// ReceiverIDs are the user IDs that can see this message.
 	ReceiverIDs []string `json:"receiver_ids"`
 	// Content is the message body.
@@ -456,7 +468,8 @@ type AddReactionRequest struct {
 	// Mode is the stream mode.
 	Mode ChannelStreamMode `json:"mode"`
 	// IsPublic must match the channel's public setting.
-	IsPublic bool `json:"is_public,omitempty"`
+	// Uses *bool so that false is transmitted rather than omitted.
+	IsPublic *bool `json:"is_public,omitempty"`
 	// EmojiID is the unique identifier of the emoji.
 	EmojiID string `json:"emoji_id"`
 	// Emoji is the emoji character or shortcode.

@@ -35,13 +35,13 @@ import (
 )
 
 const (
-	defaultWSBaseURL       = "wss://api.mezon.ai"
-	defaultPingInterval    = 10 * time.Second
-	defaultWriteTimeout    = 5 * time.Second
-	defaultPongTimeout     = 15 * time.Second
-	defaultReconnectDelay  = 1500 * time.Millisecond
+	defaultWSBaseURL         = "wss://api.mezon.ai"
+	defaultPingInterval      = 10 * time.Second
+	defaultWriteTimeout      = 5 * time.Second
+	defaultPongTimeout       = 15 * time.Second
+	defaultReconnectDelay    = 1500 * time.Millisecond
 	defaultMaxReconnectDelay = 15 * time.Second
-	defaultMaxReconnects   = 0 // 0 = unlimited
+	defaultMaxReconnects     = 0 // 0 = unlimited
 )
 
 // HandlerFunc is called when an event of the registered type is received.
@@ -107,6 +107,10 @@ type Conn struct {
 
 	// writeMu serialises writes; gorilla/websocket does not support concurrent writes.
 	writeMu sync.Mutex
+
+	// closed is set to true by Close() to prevent reconnects after intentional shutdown.
+	closedMu sync.Mutex
+	closed   bool
 }
 
 // New creates a new Conn. token must be a valid Mezon JWT bearer token.
@@ -131,10 +135,16 @@ func New(token string, opts ...Option) (*Conn, error) {
 // Connect dials the Mezon WebSocket endpoint and starts the read/ping loops.
 // The loops run until ctx is cancelled or the connection is closed.
 func (c *Conn) Connect(ctx context.Context) error {
-	return c.connectOnce(ctx)
+	c.closedMu.Lock()
+	c.closed = false
+	c.closedMu.Unlock()
+	return c.dial(ctx, 0)
 }
 
-func (c *Conn) connectOnce(ctx context.Context) error {
+// dial establishes a new connection and starts a fresh readLoop/pingLoop pair.
+// Each pair owns a single *websocket.Conn reference passed by value — they exit
+// permanently when that connection is replaced, eliminating the data race.
+func (c *Conn) dial(ctx context.Context, attempt int) error {
 	url := fmt.Sprintf("%s/ws?lang=en&status=true&token=%s&format=json", c.baseURL, c.token)
 
 	dialer := websocket.Dialer{
@@ -148,6 +158,9 @@ func (c *Conn) connectOnce(ctx context.Context) error {
 		return fmt.Errorf("websocket: dial %s: %w", c.baseURL, err)
 	}
 
+	// donePing is closed when the readLoop exits, signalling pingLoop to stop.
+	donePing := make(chan struct{})
+
 	ws.SetPongHandler(func(string) error {
 		return ws.SetReadDeadline(time.Now().Add(defaultPongTimeout))
 	})
@@ -158,15 +171,21 @@ func (c *Conn) connectOnce(ctx context.Context) error {
 
 	c.logger.Info("websocket connected", "url", c.baseURL)
 
-	// Start background loops.
-	go c.readLoop(ctx)
-	go c.pingLoop(ctx)
+	// Pass ws explicitly so each goroutine owns its own reference.
+	// When this ws is replaced, the old goroutines exit permanently.
+	go c.readLoop(ctx, ws, attempt, donePing)
+	go c.pingLoop(ctx, ws, donePing)
 
 	return nil
 }
 
 // Close sends a close frame and tears down the connection.
+// After Close, no automatic reconnection will be attempted.
 func (c *Conn) Close() error {
+	c.closedMu.Lock()
+	c.closed = true
+	c.closedMu.Unlock()
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -273,19 +292,17 @@ func (c *Conn) nextCID() string {
 	return fmt.Sprintf("%d", c.cidCounter.Add(1))
 }
 
-// readLoop continuously reads messages and dispatches them.
-func (c *Conn) readLoop(ctx context.Context) {
-	attempts := 0
+// readLoop continuously reads messages from ws and dispatches them.
+// ws is the specific connection this goroutine owns — it exits permanently
+// when that connection errors, then triggers a reconnect via scheduleReconnect.
+func (c *Conn) readLoop(ctx context.Context, ws *websocket.Conn, attempt int, donePing chan struct{}) {
+	defer func() {
+		close(donePing) // signal pingLoop to exit
+		ws.Close()
+	}()
+
 	for {
 		if err := ctx.Err(); err != nil {
-			return
-		}
-
-		c.mu.RLock()
-		ws := c.ws
-		c.mu.RUnlock()
-
-		if ws == nil {
 			return
 		}
 
@@ -302,30 +319,15 @@ func (c *Conn) readLoop(ctx context.Context) {
 			c.pending = make(map[string]chan json.RawMessage)
 			c.pendingMu.Unlock()
 
-			if !c.autoReconnect {
-				return
+			// Clear the connection ref so IsOpen() returns false.
+			c.mu.Lock()
+			if c.ws == ws {
+				c.ws = nil
 			}
-			if c.maxReconnects > 0 && attempts >= c.maxReconnects {
-				c.logger.Error("websocket max reconnect attempts reached")
-				return
-			}
+			c.mu.Unlock()
 
-			delay := backoffDelay(attempts)
-			c.logger.Info("websocket reconnecting", "delay", delay, "attempt", attempts+1)
-
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(delay):
-			}
-
-			if reconnErr := c.connectOnce(ctx); reconnErr != nil {
-				c.logger.Error("websocket reconnect failed", "error", reconnErr)
-				attempts++
-				continue
-			}
-			attempts = 0
-			continue
+			c.scheduleReconnect(ctx, attempt)
+			return // exits permanently; scheduleReconnect dials a fresh pair
 		}
 
 		var env Envelope
@@ -355,8 +357,40 @@ func (c *Conn) readLoop(ctx context.Context) {
 	}
 }
 
-// pingLoop sends periodic pings to keep the connection alive.
-func (c *Conn) pingLoop(ctx context.Context) {
+// scheduleReconnect waits for the backoff delay then dials a new connection.
+// It runs in the readLoop goroutine after readLoop returns.
+func (c *Conn) scheduleReconnect(ctx context.Context, attempt int) {
+	c.closedMu.Lock()
+	isClosed := c.closed
+	c.closedMu.Unlock()
+
+	if isClosed || !c.autoReconnect {
+		return
+	}
+	if c.maxReconnects > 0 && attempt >= c.maxReconnects {
+		c.logger.Error("websocket max reconnect attempts reached")
+		return
+	}
+
+	delay := backoffDelay(attempt)
+	c.logger.Info("websocket reconnecting", "delay", delay, "attempt", attempt+1)
+
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(delay):
+	}
+
+	if err := c.dial(ctx, attempt+1); err != nil {
+		c.logger.Error("websocket reconnect failed", "error", err)
+		// dial failed; start another reconnect cycle with incremented attempt.
+		go c.scheduleReconnect(ctx, attempt+1)
+	}
+}
+
+// pingLoop sends periodic pings to keep ws alive.
+// It owns ws and exits when donePing is closed (readLoop exited) or ctx is done.
+func (c *Conn) pingLoop(ctx context.Context, ws *websocket.Conn, donePing <-chan struct{}) {
 	ticker := time.NewTicker(c.pingInterval)
 	defer ticker.Stop()
 
@@ -364,23 +398,17 @@ func (c *Conn) pingLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-donePing:
+			return
 		case <-ticker.C:
-			c.mu.RLock()
-			ws := c.ws
-			c.mu.RUnlock()
-
-			if ws == nil {
-				return
-			}
-
 			c.writeMu.Lock()
 			_ = ws.SetWriteDeadline(time.Now().Add(defaultWriteTimeout))
-			if err := ws.WriteMessage(websocket.PingMessage, nil); err != nil {
+			err := ws.WriteMessage(websocket.PingMessage, nil)
+			c.writeMu.Unlock()
+			if err != nil {
 				c.logger.Warn("websocket: ping failed", "error", err)
-				c.writeMu.Unlock()
 				return
 			}
-			c.writeMu.Unlock()
 		}
 	}
 }
@@ -406,7 +434,11 @@ func (c *Conn) dispatch(event models.Event, payload json.RawMessage) {
 }
 
 // backoffDelay returns the reconnection wait time for the given attempt index.
+// N2 fix: cap attempt to avoid bit-shift overflow.
 func backoffDelay(attempt int) time.Duration {
+	if attempt >= 10 {
+		return defaultMaxReconnectDelay
+	}
 	d := defaultReconnectDelay * time.Duration(1<<uint(attempt))
 	if d > defaultMaxReconnectDelay {
 		d = defaultMaxReconnectDelay

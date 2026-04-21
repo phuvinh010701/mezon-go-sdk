@@ -70,12 +70,13 @@ func TestSendMessageRequestJSONTags(t *testing.T) {
 
 func TestMessageEmbedRoundtrip(t *testing.T) {
 	color := 0xFF5500
+	inlineTrue := true
 	embed := models.MessageEmbed{
 		Title:       "Test Embed",
 		Description: "desc",
 		Color:       &color,
 		Fields: []models.EmbedField{
-			{Name: "field1", Value: "val1", Inline: true},
+			{Name: "field1", Value: "val1", Inline: &inlineTrue},
 		},
 		Footer:    &models.EmbedFooter{Text: "footer text"},
 		Thumbnail: &models.EmbedThumbnail{URL: "https://example.com/thumb.png"},
@@ -121,5 +122,37 @@ func TestEventConstants(t *testing.T) {
 	}
 	if models.EventMessageButtonClicked != "message_button_clicked" {
 		t.Errorf("EventMessageButtonClicked: got %q", models.EventMessageButtonClicked)
+	}
+}
+
+func TestBoolPtrFalsePreserved(t *testing.T) {
+	// Ensures that *bool false is included in JSON output (not omitted).
+	f := false
+	req := models.SendMessageRequest{
+		ChannelID:       "ch-1",
+		Mode:            models.StreamModeChannel,
+		Content:         &models.MessageContent{T: "hi"},
+		Code:            models.MessageTypeChat,
+		IsPublic:        &f,
+		MentionEveryone: &f,
+		Anonymous:       &f,
+	}
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, key := range []string{"is_public", "mention_everyone", "anonymous"} {
+		v, ok := m[key]
+		if !ok {
+			t.Errorf("key %q missing from JSON when value is false", key)
+			continue
+		}
+		if v != false {
+			t.Errorf("key %q: got %v, want false", key, v)
+		}
 	}
 }
